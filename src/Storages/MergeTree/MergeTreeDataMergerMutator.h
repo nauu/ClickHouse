@@ -148,7 +148,8 @@ public:
         const StorageMetadataPtr & metadata_snapshot,
         const MergeTreeTransactionPtr & txn,
         PreformattedMessage & out_disable_reason,
-        bool optimize_skip_merged_partitions = false);
+        bool optimize_skip_merged_partitions = false,
+        size_t max_total_size_to_merge = 0);
 
     /** Creates a task to merge parts.
       * If `reservation != nullptr`, now and then reduces the size of the reserved space

@@ -74,6 +74,7 @@ namespace MergeTreeSetting
     extern const MergeTreeSettingsUInt64 merge_selector_window_size;
     extern const MergeTreeSettingsBool min_age_to_force_merge_on_partition_only;
     extern const MergeTreeSettingsUInt64 min_age_to_force_merge_seconds;
+    extern const MergeTreeSettingsBool enable_max_bytes_limit_for_min_age_to_force_merge;
     extern const MergeTreeSettingsUInt64 number_of_free_entries_in_pool_to_execute_optimize_entire_partition;
     extern const MergeTreeSettingsUInt64 number_of_free_entries_in_pool_to_execute_mutation;
     extern const MergeTreeSettingsUInt64 number_of_free_entries_in_pool_to_lower_max_size_of_merge;
@@ -201,6 +202,12 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMerge(
     String best_partition_id_to_optimize = getBestPartitionToOptimizeEntire(info.partitions_info);
     if (!best_partition_id_to_optimize.empty())
     {
+        const auto data_settings = data.getSettings();
+        size_t max_total_size = 0;
+
+        if ((*data_settings)[MergeTreeSetting::enable_max_bytes_limit_for_min_age_to_force_merge])
+            max_total_size = max_total_size_to_merge;
+
         return selectAllPartsToMergeWithinPartition(
             future_part,
             can_merge_callback,
@@ -209,7 +216,8 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMerge(
             metadata_snapshot,
             txn,
             out_disable_reason,
-            /*optimize_skip_merged_partitions=*/true);
+            /*optimize_skip_merged_partitions=*/true,
+            /*max_total_size_to_merge*/max_total_size);
     }
 
     if (!out_disable_reason.text.empty())
@@ -668,7 +676,8 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectAllPartsToMergeWithinParti
     const StorageMetadataPtr & metadata_snapshot,
     const MergeTreeTransactionPtr & txn,
     PreformattedMessage & out_disable_reason,
-    bool optimize_skip_merged_partitions)
+    bool optimize_skip_merged_partitions,
+    size_t max_total_size_to_merge)
 {
     MergeTreeData::DataPartsVector parts = selectAllPartsFromPartition(partition_id);
 
@@ -709,6 +718,15 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectAllPartsToMergeWithinParti
 
         prev_it = it;
         ++it;
+    }
+
+    if (max_total_size_to_merge && sum_bytes > max_total_size_to_merge)
+    {
+        LOG_TRACE(log, "Won't merge parts from {} to {} because the total size of parts in partition: {}, is greater than max_total_size_to_merge: {}",
+            parts.front()->name, (*prev_it)->name, ReadableSize(sum_bytes), ReadableSize(max_total_size_to_merge));
+
+        out_disable_reason = PreformattedMessage::create("The total size of parts in partition is greater than max_total_size_to_merge");
+        return SelectPartsDecision::CANNOT_SELECT;
     }
 
     auto available_disk_space = data.getStoragePolicy()->getMaxUnreservedFreeSpace();
